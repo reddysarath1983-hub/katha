@@ -4,7 +4,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import StoryCard from '@/components/StoryCard';
-import { getStories } from '@/lib/dataService';
+import { getStories, syncStoriesFromSupabase } from '@/lib/dataService';
 import { Story, Genre } from '@/types';
 import { Compass, Filter, ArrowUpDown, PenSquare, Film } from 'lucide-react';
 
@@ -40,6 +40,10 @@ function StoriesContent() {
 
   useEffect(() => {
     setStories(getStories({ genre: selectedGenre, sortBy: selectedSort }));
+
+    syncStoriesFromSupabase().then(() => {
+      setStories(getStories({ genre: selectedGenre, sortBy: selectedSort }));
+    });
   }, [selectedGenre, selectedSort]);
 
   return (

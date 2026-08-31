@@ -6,13 +6,7 @@ import {
   NotificationItem,
   Report,
 } from '@/types';
-import {
-  SAMPLE_STORIES,
-  SAMPLE_PROFILES,
-  SAMPLE_COMMENTS,
-  SAMPLE_ACHIEVEMENTS,
-  SAMPLE_NOTIFICATIONS,
-} from './sampleData';
+import { supabase, isSupabaseConfigured } from './supabase';
 
 const STORIES_STORAGE_KEY = 'katha_real_stories_v3';
 const PROFILES_STORAGE_KEY = 'katha_real_profiles_v3';
@@ -79,14 +73,15 @@ export function setCurrentProfile(profile: Profile | null) {
   if (typeof window === 'undefined') return;
   if (profile) {
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(profile));
-    // Save to profiles registry if missing
     const profilesStr = localStorage.getItem(PROFILES_STORAGE_KEY) || '[]';
     const profiles: Profile[] = JSON.parse(profilesStr);
     const idx = profiles.findIndex((p) => p.id === profile.id || p.username === profile.username);
     if (idx === -1) {
       profiles.push(profile);
-      localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles));
+    } else {
+      profiles[idx] = { ...profiles[idx], ...profile };
     }
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles));
   } else {
     localStorage.removeItem(CURRENT_USER_KEY);
   }
@@ -121,13 +116,29 @@ export function updateProfile(userId: string, updates: Partial<Profile>): Profil
     if (current && (current.id === userId || current.user_id === userId)) {
       setCurrentProfile(profiles[idx]);
     }
+
+    if (isSupabaseConfigured()) {
+      supabase
+        .from('profiles')
+        .update({
+          display_name: updates.display_name,
+          bio: updates.bio,
+          avatar_url: updates.avatar_url,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', userId)
+        .then(({ error }) => {
+          if (error) console.warn('[KATHA DB UPDATE PROFILE ERROR]:', error);
+        });
+    }
+
     return profiles[idx];
   }
   return null;
 }
 
 // ----------------------------------------------------------------------
-// STORIES & REAL DATA QUERIES
+// WORLDWIDE SUPABASE STORIES QUERY & SYNC
 // ----------------------------------------------------------------------
 
 export interface QueryOptions {
@@ -136,6 +147,74 @@ export interface QueryOptions {
   search?: string;
   authorId?: string;
   publishedOnly?: boolean;
+}
+
+// Synchronizes stories from Supabase database globally
+export async function syncStoriesFromSupabase(): Promise<Story[]> {
+  if (!isSupabaseConfigured() || typeof window === 'undefined') return getStories();
+
+  try {
+    const { data: dbStories, error } = await supabase
+      .from('stories')
+      .select('*, author:profiles(*)');
+
+    if (error || !dbStories) {
+      console.warn('[KATHA SUPABASE FETCH WARNING]:', error);
+      return getStories();
+    }
+
+    const parsed: Story[] = dbStories.map((row: any) => {
+      const authorObj: Profile = row.author ? {
+        id: row.author.id,
+        user_id: row.author.user_id,
+        username: row.author.username,
+        display_name: row.author.display_name,
+        avatar_url: row.author.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+        bio: row.author.bio,
+        katha_score: row.author.katha_score || 100,
+        created_at: row.author.created_at,
+      } : {
+        id: row.author_id,
+        user_id: row.author_id,
+        username: `writer_${row.author_id.substring(0, 5)}`,
+        display_name: 'Katha Storyteller',
+        avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+        bio: 'TFI Cinema Storyteller',
+        katha_score: 100,
+        created_at: row.created_at,
+      };
+
+      return {
+        id: row.id,
+        author_id: row.author_id,
+        author: authorObj,
+        title: row.title,
+        slug: row.slug,
+        genre: row.genre,
+        pitch: row.pitch,
+        content: row.content,
+        cover_image_url: row.cover_image_url || 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=1000&auto=format&fit=crop&q=80',
+        views: row.views || 0,
+        likes_count: row.likes_count || 0,
+        would_watch_yes: row.would_watch_yes || 0,
+        would_watch_no: row.would_watch_no || 0,
+        average_rating: Number(row.average_rating || 0),
+        rating_count: row.rating_count || 0,
+        published: row.published !== false,
+        casting_note: row.casting_note,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        hero_casting: row.hero_casting || {},
+        director_casting: row.director_casting || {},
+      };
+    });
+
+    localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(parsed));
+    return parsed;
+  } catch (err) {
+    console.error('[KATHA SUPABASE SYNC ERROR]:', err);
+    return getStories();
+  }
 }
 
 export function getStories(options: QueryOptions = {}): Story[] {
@@ -237,6 +316,16 @@ export function recordStoryView(storyId: string) {
   if (idx !== -1) {
     stories[idx].views += 1;
     localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+    if (isSupabaseConfigured()) {
+      supabase
+        .from('stories')
+        .update({ views: stories[idx].views })
+        .eq('id', storyId)
+        .then(({ error }) => {
+          if (error) console.warn('[KATHA DB VIEW UPDATE WARN]:', error);
+        });
+    }
   }
 }
 
@@ -274,6 +363,22 @@ export function toggleStoryLike(storyId: string): { isLiked: boolean; newCount: 
         : Math.max(0, stories[storyIdx].likes_count - 1);
       newCount = stories[storyIdx].likes_count;
       localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+      if (isSupabaseConfigured()) {
+        supabase
+          .from('stories')
+          .update({ likes_count: newCount })
+          .eq('id', storyId)
+          .then(({ error }) => {
+            if (error) console.warn('[KATHA DB LIKE UPDATE WARN]:', error);
+          });
+
+        if (isLiked) {
+          supabase.from('story_likes').insert([{ story_id: storyId, user_id: user.id }]).then();
+        } else {
+          supabase.from('story_likes').delete().match({ story_id: storyId, user_id: user.id }).then();
+        }
+      }
     }
   }
 
@@ -318,6 +423,20 @@ export function submitStoryRating(storyId: string, ratingValue: number): Story |
       stories[storyIdx].average_rating = avg;
       stories[storyIdx].rating_count = allVals.length;
       localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+      if (isSupabaseConfigured()) {
+        supabase
+          .from('stories')
+          .update({ average_rating: avg })
+          .eq('id', storyId)
+          .then();
+
+        supabase
+          .from('story_ratings')
+          .upsert([{ story_id: storyId, user_id: user.id, rating: ratingValue }])
+          .then();
+      }
+
       return stories[storyIdx];
     }
   }
@@ -355,6 +474,22 @@ export function submitWouldWatchVote(storyId: string, vote: 'yes' | 'no'): { yes
         stories[storyIdx].would_watch_no += 1;
       }
       localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+      if (isSupabaseConfigured()) {
+        supabase
+          .from('stories')
+          .update({
+            would_watch_yes: stories[storyIdx].would_watch_yes,
+            would_watch_no: stories[storyIdx].would_watch_no,
+          })
+          .eq('id', storyId)
+          .then();
+
+        supabase
+          .from('would_watch_votes')
+          .upsert([{ story_id: storyId, user_id: user.id, vote }])
+          .then();
+      }
     }
   }
 
@@ -407,6 +542,13 @@ export function submitCastingVote(storyId: string, category: 'hero' | 'director'
       if (!stories[storyIdx][field]) stories[storyIdx][field] = {};
       stories[storyIdx][field]![choice] = (stories[storyIdx][field]![choice] || 0) + 1;
       localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+      if (isSupabaseConfigured()) {
+        supabase
+          .from('casting_votes')
+          .upsert([{ story_id: storyId, user_id: user.id, category, choice }])
+          .then();
+      }
     }
   }
 }
@@ -445,6 +587,18 @@ export function createComment(storyId: string, content: string, parentId?: strin
   const list: Comment[] = str ? JSON.parse(str) : [];
   list.unshift(newComment);
   localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(list));
+
+  if (isSupabaseConfigured()) {
+    supabase
+      .from('comments')
+      .insert([{
+        story_id: storyId,
+        author_id: user.id,
+        parent_id: parentId || null,
+        content: content.trim(),
+      }])
+      .then();
+  }
 
   const story = getStoryBySlugOrId(storyId);
   if (story && story.author_id !== user.id) {
@@ -510,6 +664,36 @@ export function createStory(data: {
   stories.unshift(newStory);
   localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
 
+  // Insert directly into Supabase PostgreSQL table 'stories' so it becomes visible WORLDWIDE to all users
+  if (isSupabaseConfigured()) {
+    supabase
+      .from('stories')
+      .insert([
+        {
+          author_id: user.id,
+          title: data.title.trim(),
+          slug,
+          genre: data.genre,
+          pitch: data.pitch.trim(),
+          content: data.content.trim(),
+          cover_image_url: data.cover_image_url?.trim() || defaultCover,
+          published: data.published !== false,
+          views: 1,
+          likes_count: 1,
+          would_watch_yes: 1,
+          would_watch_no: 0,
+          average_rating: 9.0,
+        },
+      ])
+      .then(({ data: dbData, error }) => {
+        if (error) {
+          console.error('[KATHA SUPABASE CREATE STORY ERROR]:', error);
+        } else {
+          console.log('[KATHA SUPABASE STORY PUBLISHED WORLDWIDE]:', slug);
+        }
+      });
+  }
+
   updateProfile(user.id, { katha_score: (user.katha_score || 100) + 100 });
 
   return newStory;
@@ -526,6 +710,15 @@ export function updateStoryStatus(storyId: string, published: boolean): Story | 
     stories[idx].published = published;
     stories[idx].updated_at = new Date().toISOString();
     localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+    if (isSupabaseConfigured()) {
+      supabase
+        .from('stories')
+        .update({ published, updated_at: new Date().toISOString() })
+        .eq('id', storyId)
+        .then();
+    }
+
     return stories[idx];
   }
   return null;
@@ -538,6 +731,10 @@ export function deleteStory(storyId: string) {
   const stories: Story[] = JSON.parse(str);
   const filtered = stories.filter((s) => s.id !== storyId);
   localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(filtered));
+
+  if (isSupabaseConfigured()) {
+    supabase.from('stories').delete().eq('id', storyId).then();
+  }
 }
 
 // ----------------------------------------------------------------------
@@ -567,6 +764,16 @@ export function addNotification(item: Omit<NotificationItem, 'id' | 'created_at'
   const list = getNotifications();
   list.unshift(newNotif);
   localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(list));
+
+  if (isSupabaseConfigured()) {
+    supabase.from('notifications').insert([{
+      user_id: item.user_id,
+      type: item.type,
+      title: item.title,
+      message: item.message,
+      link: item.link,
+    }]).then();
+  }
 }
 
 export function markNotificationRead(id: string) {

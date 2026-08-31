@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getStoryBySlugOrId, recordStoryView, getCurrentProfile, toggleStoryLike, getStoryLikeState } from '@/lib/dataService';
+import { getStoryBySlugOrId, syncStoriesFromSupabase, recordStoryView, toggleStoryLike, getStoryLikeState } from '@/lib/dataService';
 import { Story } from '@/types';
 import WouldWatchModule from '@/components/WouldWatchModule';
 import StoryRatingModule from '@/components/StoryRatingModule';
@@ -11,7 +11,7 @@ import FanCastingModule from '@/components/FanCastingModule';
 import CommentsSection from '@/components/CommentsSection';
 import ShareVerdictModal from '@/components/ShareVerdictModal';
 import ReportModal from '@/components/ReportModal';
-import { Star, Flame, Eye, Share2, ShieldAlert, ArrowLeft, Heart, Sparkles } from 'lucide-react';
+import { Star, Flame, Eye, Share2, ShieldAlert, ArrowLeft, Heart, Sparkles, Loader2 } from 'lucide-react';
 
 export default function StoryPage() {
   const params = useParams();
@@ -19,6 +19,7 @@ export default function StoryPage() {
   const slug = params.slug as string;
 
   const [story, setStory] = useState<Story | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
   const [likesCount, setLikesCount] = useState<number>(0);
   const [isLiked, setIsLiked] = useState<boolean>(false);
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
@@ -32,8 +33,29 @@ export default function StoryPage() {
       setLikesCount(s.likes_count);
       setIsLiked(getStoryLikeState(s.id));
       recordStoryView(s.id);
+      setLoading(false);
+    } else {
+      syncStoriesFromSupabase().then(() => {
+        const found = getStoryBySlugOrId(slug);
+        if (found) {
+          setStory(found);
+          setLikesCount(found.likes_count);
+          setIsLiked(getStoryLikeState(found.id));
+          recordStoryView(found.id);
+        }
+        setLoading(false);
+      });
     }
   }, [slug]);
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-24 text-center space-y-4">
+        <Loader2 className="w-10 h-10 text-red-500 animate-spin mx-auto" />
+        <p className="text-sm text-zinc-400">Loading story script...</p>
+      </div>
+    );
+  }
 
   if (!story) {
     return (

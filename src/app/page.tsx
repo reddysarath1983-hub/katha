@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import StoryCard from '@/components/StoryCard';
-import { getStories } from '@/lib/dataService';
+import { getStories, syncStoriesFromSupabase } from '@/lib/dataService';
 import { Story } from '@/types';
 import { PenSquare, Flame, Sparkles, Trophy, ArrowRight, Film, Star, Eye } from 'lucide-react';
 
@@ -13,8 +13,7 @@ export default function HomePage() {
   const [hotStories, setHotStories] = useState<Story[]>([]);
   const [leaderboard, setLeaderboard] = useState<{ rank: number; story: Story; score: number }[]>([]);
 
-  useEffect(() => {
-    const all = getStories({ sortBy: 'Trending' });
+  const loadAllStories = (all: Story[]) => {
     setTrendingStories(all.slice(0, 3));
     
     const newest = getStories({ sortBy: 'Newest' });
@@ -48,6 +47,18 @@ export default function HomePage() {
         score: item.score,
       }))
     );
+  };
+
+  useEffect(() => {
+    // Immediate load from cache
+    loadAllStories(getStories({ sortBy: 'Trending' }));
+
+    // Global sync from Supabase database for worldwide stories
+    syncStoriesFromSupabase().then((synced) => {
+      if (synced && synced.length > 0) {
+        loadAllStories(getStories({ sortBy: 'Trending' }));
+      }
+    });
   }, []);
 
   return (
