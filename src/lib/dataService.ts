@@ -138,7 +138,7 @@ export function updateProfile(userId: string, updates: Partial<Profile>): Profil
 }
 
 // ----------------------------------------------------------------------
-// WORLDWIDE SUPABASE STORIES QUERY & SYNC
+// WORLDWIDE STORIES QUERY & DUAL SYNC (SUPABASE + SERVER BACKEND)
 // ----------------------------------------------------------------------
 
 export interface QueryOptions {
@@ -149,72 +149,94 @@ export interface QueryOptions {
   publishedOnly?: boolean;
 }
 
-// Synchronizes stories from Supabase database globally
 export async function syncStoriesFromSupabase(): Promise<Story[]> {
-  if (!isSupabaseConfigured() || typeof window === 'undefined') return getStories();
+  if (typeof window === 'undefined') return getStories();
 
-  try {
-    const { data: dbStories, error } = await supabase
-      .from('stories')
-      .select('*, author:profiles(*)');
+  if (isSupabaseConfigured()) {
+    try {
+      const { data: dbStories, error } = await supabase
+        .from('stories')
+        .select('*, author:profiles(*)');
 
-    if (error || !dbStories) {
-      console.warn('[KATHA SUPABASE FETCH WARNING]:', error);
-      return getStories();
+      if (!error && dbStories) {
+        const parsed: Story[] = dbStories.map((row: any) => {
+          const authorObj: Profile = row.author ? {
+            id: row.author.id,
+            user_id: row.author.user_id,
+            username: row.author.username,
+            display_name: row.author.display_name,
+            avatar_url: row.author.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+            bio: row.author.bio,
+            katha_score: row.author.katha_score || 100,
+            created_at: row.author.created_at,
+          } : {
+            id: row.author_id,
+            user_id: row.author_id,
+            username: `writer_${row.author_id.substring(0, 5)}`,
+            display_name: 'Katha Storyteller',
+            avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+            bio: 'TFI Cinema Storyteller',
+            katha_score: 100,
+            created_at: row.created_at,
+          };
+
+          return {
+            id: row.id,
+            author_id: row.author_id,
+            author: authorObj,
+            title: row.title,
+            slug: row.slug,
+            genre: row.genre,
+            pitch: row.pitch,
+            content: row.content,
+            cover_image_url: row.cover_image_url || 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=1000&auto=format&fit=crop&q=80',
+            views: row.views || 0,
+            likes_count: row.likes_count || 0,
+            would_watch_yes: row.would_watch_yes || 0,
+            would_watch_no: row.would_watch_no || 0,
+            average_rating: Number(row.average_rating || 0),
+            rating_count: row.rating_count || 0,
+            published: row.published !== false,
+            casting_note: row.casting_note,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            hero_casting: row.hero_casting || {},
+            director_casting: row.director_casting || {},
+          };
+        });
+
+        localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(parsed));
+        return parsed;
+      }
+    } catch (err) {
+      console.warn('[KATHA SUPABASE SYNC ERROR]:', err);
     }
-
-    const parsed: Story[] = dbStories.map((row: any) => {
-      const authorObj: Profile = row.author ? {
-        id: row.author.id,
-        user_id: row.author.user_id,
-        username: row.author.username,
-        display_name: row.author.display_name,
-        avatar_url: row.author.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
-        bio: row.author.bio,
-        katha_score: row.author.katha_score || 100,
-        created_at: row.author.created_at,
-      } : {
-        id: row.author_id,
-        user_id: row.author_id,
-        username: `writer_${row.author_id.substring(0, 5)}`,
-        display_name: 'Katha Storyteller',
-        avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
-        bio: 'TFI Cinema Storyteller',
-        katha_score: 100,
-        created_at: row.created_at,
-      };
-
-      return {
-        id: row.id,
-        author_id: row.author_id,
-        author: authorObj,
-        title: row.title,
-        slug: row.slug,
-        genre: row.genre,
-        pitch: row.pitch,
-        content: row.content,
-        cover_image_url: row.cover_image_url || 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=1000&auto=format&fit=crop&q=80',
-        views: row.views || 0,
-        likes_count: row.likes_count || 0,
-        would_watch_yes: row.would_watch_yes || 0,
-        would_watch_no: row.would_watch_no || 0,
-        average_rating: Number(row.average_rating || 0),
-        rating_count: row.rating_count || 0,
-        published: row.published !== false,
-        casting_note: row.casting_note,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        hero_casting: row.hero_casting || {},
-        director_casting: row.director_casting || {},
-      };
-    });
-
-    localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(parsed));
-    return parsed;
-  } catch (err) {
-    console.error('[KATHA SUPABASE SYNC ERROR]:', err);
-    return getStories();
   }
+
+  // Fallback Server API sync to share stories across all users/browsers worldwide
+  try {
+    const res = await fetch('/api/stories');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.stories)) {
+        const localStr = localStorage.getItem(STORIES_STORAGE_KEY) || '[]';
+        const localStories: Story[] = JSON.parse(localStr);
+        
+        // Merge server stories with local stories
+        const map = new Map<string, Story>();
+        data.stories.forEach((s: Story) => map.set(s.id, s));
+        localStories.forEach((s: Story) => map.set(s.id, s));
+
+        const merged = Array.from(map.values());
+        localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(merged));
+        return merged;
+      }
+    }
+  } catch (err) {
+    console.warn('[KATHA SERVER API SYNC WARN]:', err);
+  }
+
+  return getStories();
 }
 
 export function getStories(options: QueryOptions = {}): Story[] {
@@ -326,6 +348,12 @@ export function recordStoryView(storyId: string) {
           if (error) console.warn('[KATHA DB VIEW UPDATE WARN]:', error);
         });
     }
+
+    fetch('/api/stories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(stories[idx]),
+    }).catch(() => {});
   }
 }
 
@@ -369,9 +397,7 @@ export function toggleStoryLike(storyId: string): { isLiked: boolean; newCount: 
           .from('stories')
           .update({ likes_count: newCount })
           .eq('id', storyId)
-          .then(({ error }) => {
-            if (error) console.warn('[KATHA DB LIKE UPDATE WARN]:', error);
-          });
+          .then();
 
         if (isLiked) {
           supabase.from('story_likes').insert([{ story_id: storyId, user_id: user.id }]).then();
@@ -379,6 +405,12 @@ export function toggleStoryLike(storyId: string): { isLiked: boolean; newCount: 
           supabase.from('story_likes').delete().match({ story_id: storyId, user_id: user.id }).then();
         }
       }
+
+      fetch('/api/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stories[storyIdx]),
+      }).catch(() => {});
     }
   }
 
@@ -425,17 +457,15 @@ export function submitStoryRating(storyId: string, ratingValue: number): Story |
       localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
 
       if (isSupabaseConfigured()) {
-        supabase
-          .from('stories')
-          .update({ average_rating: avg })
-          .eq('id', storyId)
-          .then();
-
-        supabase
-          .from('story_ratings')
-          .upsert([{ story_id: storyId, user_id: user.id, rating: ratingValue }])
-          .then();
+        supabase.from('stories').update({ average_rating: avg }).eq('id', storyId).then();
+        supabase.from('story_ratings').upsert([{ story_id: storyId, user_id: user.id, rating: ratingValue }]).then();
       }
+
+      fetch('/api/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stories[storyIdx]),
+      }).catch(() => {});
 
       return stories[storyIdx];
     }
@@ -490,6 +520,12 @@ export function submitWouldWatchVote(storyId: string, vote: 'yes' | 'no'): { yes
           .upsert([{ story_id: storyId, user_id: user.id, vote }])
           .then();
       }
+
+      fetch('/api/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stories[storyIdx]),
+      }).catch(() => {});
     }
   }
 
@@ -549,6 +585,12 @@ export function submitCastingVote(storyId: string, category: 'hero' | 'director'
           .upsert([{ story_id: storyId, user_id: user.id, category, choice }])
           .then();
       }
+
+      fetch('/api/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stories[storyIdx]),
+      }).catch(() => {});
     }
   }
 }
@@ -664,7 +706,14 @@ export function createStory(data: {
   stories.unshift(newStory);
   localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
 
-  // Insert directly into Supabase PostgreSQL table 'stories' so it becomes visible WORLDWIDE to all users
+  // 1. Post to Server API route so ALL users/devices on the web server see this story
+  fetch('/api/stories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(newStory),
+  }).catch((err) => console.warn('[KATHA API POST WARN]:', err));
+
+  // 2. Insert into Supabase PostgreSQL table 'stories' when Supabase keys are configured
   if (isSupabaseConfigured()) {
     supabase
       .from('stories')
@@ -710,6 +759,12 @@ export function updateStoryStatus(storyId: string, published: boolean): Story | 
     stories[idx].published = published;
     stories[idx].updated_at = new Date().toISOString();
     localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
+
+    fetch('/api/stories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(stories[idx]),
+    }).catch(() => {});
 
     if (isSupabaseConfigured()) {
       supabase
