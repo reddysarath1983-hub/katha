@@ -99,7 +99,8 @@ export default function WriteStoryPage() {
         content,
         cover_image_url: coverImageUrl,
         casting_note: castingNote,
-        published: !isDraft,
+        published: false,
+        visibility: 'private',
       });
 
       if (isDraft) {

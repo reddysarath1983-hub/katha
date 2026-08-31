@@ -138,7 +138,7 @@ export function updateProfile(userId: string, updates: Partial<Profile>): Profil
 }
 
 // ----------------------------------------------------------------------
-// WORLDWIDE STORIES QUERY & DUAL SYNC (SUPABASE + SERVER BACKEND)
+// STORIES & BACKEND VISIBILITY SECURITY
 // ----------------------------------------------------------------------
 
 export interface QueryOptions {
@@ -147,10 +147,12 @@ export interface QueryOptions {
   search?: string;
   authorId?: string;
   publishedOnly?: boolean;
+  visibility?: 'private' | 'public';
 }
 
 export async function syncStoriesFromSupabase(): Promise<Story[]> {
   if (typeof window === 'undefined') return getStories();
+  const user = getCurrentProfile();
 
   if (isSupabaseConfigured()) {
     try {
@@ -196,7 +198,8 @@ export async function syncStoriesFromSupabase(): Promise<Story[]> {
             would_watch_no: row.would_watch_no || 0,
             average_rating: Number(row.average_rating || 0),
             rating_count: row.rating_count || 0,
-            published: row.published !== false,
+            published: row.published === true || row.visibility === 'public',
+            visibility: (row.visibility || 'private') as 'private' | 'public',
             casting_note: row.casting_note,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -206,54 +209,59 @@ export async function syncStoriesFromSupabase(): Promise<Story[]> {
         });
 
         localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(parsed));
-        return parsed;
+        return getStories({ authorId: user?.id });
       }
     } catch (err) {
       console.warn('[KATHA SUPABASE SYNC ERROR]:', err);
     }
   }
 
-  // Fallback Server API sync to share stories across all users/browsers worldwide
+  // Server API Sync with user security header
   try {
-    const res = await fetch('/api/stories');
+    const url = user ? `/api/stories?userId=${user.id}` : '/api/stories';
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data && Array.isArray(data.stories)) {
         const localStr = localStorage.getItem(STORIES_STORAGE_KEY) || '[]';
         const localStories: Story[] = JSON.parse(localStr);
         
-        // Merge server stories with local stories
         const map = new Map<string, Story>();
         data.stories.forEach((s: Story) => map.set(s.id, s));
         localStories.forEach((s: Story) => map.set(s.id, s));
 
         const merged = Array.from(map.values());
         localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(merged));
-        return merged;
+        return getStories({ authorId: user?.id });
       }
     }
   } catch (err) {
     console.warn('[KATHA SERVER API SYNC WARN]:', err);
   }
 
-  return getStories();
+  return getStories({ authorId: user?.id });
 }
 
 export function getStories(options: QueryOptions = {}): Story[] {
   if (typeof window === 'undefined') return [];
   initDataService();
 
+  const currentProfile = getCurrentProfile();
   const str = localStorage.getItem(STORIES_STORAGE_KEY);
   let stories: Story[] = str ? JSON.parse(str) : [];
 
-  // Filter published status
-  if (options.publishedOnly !== false) {
-    stories = stories.filter((s) => s.published);
-  }
-
-  // Filter Author
+  // STAGE 1: VISIBILITY & SECURITY RULE ENFORCEMENT
   if (options.authorId) {
-    stories = stories.filter((s) => s.author_id === options.authorId || s.author?.id === options.authorId);
+    // When requesting author's own stories (e.g. Dashboard / My Stories), return author's stories
+    stories = stories.filter((s) => s.author_id === options.authorId || s.author?.id === options.authorId || s.author?.user_id === options.authorId);
+  } else {
+    // For ALL PUBLIC FEEDS (Homepage, Discover, Search, Leaderboard):
+    // Only return stories where visibility === 'public'
+    stories = stories.filter((s) => {
+      const isPublic = s.visibility === 'public';
+      const isMyOwnStory = currentProfile && (s.author_id === currentProfile.id || s.author?.id === currentProfile.id || s.author?.user_id === currentProfile.id);
+      return isPublic || (options.visibility === 'private' && isMyOwnStory);
+    });
   }
 
   // Filter Genre
@@ -313,14 +321,43 @@ export function getStories(options: QueryOptions = {}): Story[] {
   return stories;
 }
 
-export function getStoryBySlugOrId(identifier: string): Story | null {
-  const stories = getStories({ publishedOnly: false });
-  return stories.find((s) => s.slug === identifier || s.id === identifier) || null;
+export function getStoryBySlugOrId(identifier: string, requestingUserId?: string): Story | null {
+  if (typeof window === 'undefined') return null;
+  initDataService();
+
+  const currentProfile = getCurrentProfile();
+  const effectiveUserId = requestingUserId || currentProfile?.id;
+  const str = localStorage.getItem(STORIES_STORAGE_KEY);
+  if (!str) return null;
+
+  const stories: Story[] = JSON.parse(str);
+  const found = stories.find((s) => s.slug === identifier || s.id === identifier);
+  if (!found) return null;
+
+  // VISIBILITY CHECK: If private, ONLY the uploader can view it
+  const isOwner = effectiveUserId && (
+    found.author_id === effectiveUserId ||
+    found.author?.id === effectiveUserId ||
+    found.author?.user_id === effectiveUserId
+  );
+
+  const isPublic = found.visibility === 'public';
+
+  if (!isPublic && !isOwner) {
+    console.warn('[KATHA SECURITY]: Access denied to private story', identifier, 'for user', effectiveUserId);
+    return null; // Block direct URL access for other users
+  }
+
+  return found;
 }
 
 export function recordStoryView(storyId: string) {
   if (typeof window === 'undefined') return;
   initDataService();
+
+  const user = getCurrentProfile();
+  const story = getStoryBySlugOrId(storyId, user?.id);
+  if (!story) return;
 
   const viewedStr = sessionStorage.getItem(VIEWS_TRACKER_KEY) || '[]';
   const viewedList: string[] = JSON.parse(viewedStr);
@@ -433,7 +470,7 @@ export function submitStoryRating(storyId: string, ratingValue: number): Story |
   const user = getCurrentProfile();
   if (!user) throw new Error('Authentication required to rate stories.');
 
-  const story = getStoryBySlugOrId(storyId);
+  const story = getStoryBySlugOrId(storyId, user.id);
   if (story && (story.author_id === user.id || story.author?.id === user.id)) {
     throw new Error('As the writer of this story, you cannot rate your own story.');
   }
@@ -481,7 +518,7 @@ export function submitWouldWatchVote(storyId: string, vote: 'yes' | 'no'): { yes
   const user = getCurrentProfile();
   if (!user) throw new Error('Authentication required to vote.');
 
-  const story = getStoryBySlugOrId(storyId);
+  const story = getStoryBySlugOrId(storyId, user.id);
   if (story && (story.author_id === user.id || story.author?.id === user.id)) {
     throw new Error('As the writer of this story, you cannot vote on your own story.');
   }
@@ -535,7 +572,7 @@ export function submitWouldWatchVote(storyId: string, vote: 'yes' | 'no'): { yes
 export function getWouldWatchStats(storyId: string): { yesPercent: number; noPercent: number; totalVotes: number; userVote: 'yes' | 'no' | null } {
   if (typeof window === 'undefined') return { yesPercent: 0, noPercent: 0, totalVotes: 0, userVote: null };
   const user = getCurrentProfile();
-  const story = getStoryBySlugOrId(storyId);
+  const story = getStoryBySlugOrId(storyId, user?.id);
 
   const votesStr = localStorage.getItem(VOTES_STORAGE_KEY) || '{}';
   const votesMap: Record<string, Record<string, 'yes' | 'no'>> = JSON.parse(votesStr);
@@ -642,7 +679,7 @@ export function createComment(storyId: string, content: string, parentId?: strin
       .then();
   }
 
-  const story = getStoryBySlugOrId(storyId);
+  const story = getStoryBySlugOrId(storyId, user.id);
   if (story && story.author_id !== user.id) {
     addNotification({
       user_id: story.author_id,
@@ -657,7 +694,7 @@ export function createComment(storyId: string, content: string, parentId?: strin
 }
 
 // ----------------------------------------------------------------------
-// STORY CREATION, DRAFTS & DASHBOARD
+// STORY CREATION & VISIBILITY DEFAULTS
 // ----------------------------------------------------------------------
 
 export function createStory(data: {
@@ -668,6 +705,7 @@ export function createStory(data: {
   cover_image_url?: string;
   casting_note?: string;
   published?: boolean;
+  visibility?: 'private' | 'public';
 }): Story {
   if (typeof window === 'undefined') throw new Error('Client side only');
   initDataService();
@@ -677,6 +715,9 @@ export function createStory(data: {
 
   const slug = generateSlug(data.title);
   const defaultCover = 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=1000&auto=format&fit=crop&q=80';
+
+  // REQUIREMENT #2 & #4: Newly uploaded stories default to 'private'
+  const finalVisibility = data.visibility || 'private';
 
   const newStory: Story = {
     id: 'story_' + Date.now().toString(36),
@@ -689,12 +730,13 @@ export function createStory(data: {
     content: data.content.trim(),
     cover_image_url: data.cover_image_url?.trim() || defaultCover,
     views: 1,
-    likes_count: 1,
-    would_watch_yes: 1,
+    likes_count: 0,
+    would_watch_yes: 0,
     would_watch_no: 0,
-    average_rating: 9.0,
-    rating_count: 1,
-    published: data.published !== false,
+    average_rating: 0.0,
+    rating_count: 0,
+    published: finalVisibility === 'public',
+    visibility: finalVisibility,
     casting_note: data.casting_note?.trim(),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -702,18 +744,19 @@ export function createStory(data: {
     director_casting: {},
   };
 
-  const stories = getStories({ publishedOnly: false });
+  const str = localStorage.getItem(STORIES_STORAGE_KEY);
+  const stories: Story[] = str ? JSON.parse(str) : [];
   stories.unshift(newStory);
   localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
 
-  // 1. Post to Server API route so ALL users/devices on the web server see this story
+  // Server API route call
   fetch('/api/stories', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(newStory),
   }).catch((err) => console.warn('[KATHA API POST WARN]:', err));
 
-  // 2. Insert into Supabase PostgreSQL table 'stories' when Supabase keys are configured
+  // Supabase PostgreSQL insert with visibility = 'private'
   if (isSupabaseConfigured()) {
     supabase
       .from('stories')
@@ -726,19 +769,20 @@ export function createStory(data: {
           pitch: data.pitch.trim(),
           content: data.content.trim(),
           cover_image_url: data.cover_image_url?.trim() || defaultCover,
-          published: data.published !== false,
+          published: finalVisibility === 'public',
+          visibility: finalVisibility,
           views: 1,
-          likes_count: 1,
-          would_watch_yes: 1,
+          likes_count: 0,
+          would_watch_yes: 0,
           would_watch_no: 0,
-          average_rating: 9.0,
+          average_rating: 0.0,
         },
       ])
-      .then(({ data: dbData, error }) => {
+      .then(({ error }) => {
         if (error) {
           console.error('[KATHA SUPABASE CREATE STORY ERROR]:', error);
         } else {
-          console.log('[KATHA SUPABASE STORY PUBLISHED WORLDWIDE]:', slug);
+          console.log('[KATHA SUPABASE STORY SAVED PRIVATE]:', slug);
         }
       });
   }
@@ -748,7 +792,7 @@ export function createStory(data: {
   return newStory;
 }
 
-export function updateStoryStatus(storyId: string, published: boolean): Story | null {
+export function updateStoryStatus(storyId: string, published: boolean, visibility?: 'private' | 'public'): Story | null {
   initDataService();
   const str = localStorage.getItem(STORIES_STORAGE_KEY);
   if (!str) return null;
@@ -756,7 +800,9 @@ export function updateStoryStatus(storyId: string, published: boolean): Story | 
 
   const idx = stories.findIndex((s) => s.id === storyId);
   if (idx !== -1) {
+    const finalVis = visibility || (published ? 'public' : 'private');
     stories[idx].published = published;
+    stories[idx].visibility = finalVis;
     stories[idx].updated_at = new Date().toISOString();
     localStorage.setItem(STORIES_STORAGE_KEY, JSON.stringify(stories));
 
@@ -769,7 +815,7 @@ export function updateStoryStatus(storyId: string, published: boolean): Story | 
     if (isSupabaseConfigured()) {
       supabase
         .from('stories')
-        .update({ published, updated_at: new Date().toISOString() })
+        .update({ published, visibility: finalVis, updated_at: new Date().toISOString() })
         .eq('id', storyId)
         .then();
     }

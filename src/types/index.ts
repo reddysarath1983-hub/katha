@@ -42,6 +42,7 @@ export interface Story {
   average_rating: number;
   rating_count?: number;
   published: boolean;
+  visibility?: 'private' | 'public';
   casting_note?: string;
   is_featured?: boolean;
   created_at: string;

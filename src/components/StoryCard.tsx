@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { Story } from '@/types';
-import { Star, Flame, Eye, ArrowRight, Sparkles } from 'lucide-react';
+import { Star, Flame, Eye, ArrowRight, Sparkles, Lock } from 'lucide-react';
 
 interface StoryCardProps {
   story: Story;
@@ -25,6 +25,14 @@ export default function StoryCard({ story, featured = false }: StoryCardProps) {
         <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-gradient-to-r from-red-600 to-amber-600 text-white font-bold text-[10px] uppercase tracking-widest px-3 py-1 rounded-full shadow-lg">
           <Sparkles className="w-3 h-3" />
           <span>Featured Katha</span>
+        </div>
+      )}
+
+      {/* Private Indicator Badge (Requirement UI: Add a small Private indicator to private stories) */}
+      {story.visibility === 'private' && (
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-1 bg-zinc-950/90 backdrop-blur-md text-amber-400 font-extrabold text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-full border border-amber-800/60 shadow-lg">
+          <Lock className="w-3 h-3" />
+          <span>Private</span>
         </div>
       )}
 

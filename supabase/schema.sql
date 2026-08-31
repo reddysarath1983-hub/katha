@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS public.stories (
   would_watch_yes INT DEFAULT 0,
   would_watch_no INT DEFAULT 0,
   average_rating NUMERIC(3,1) DEFAULT 0.0,
-  published BOOLEAN DEFAULT TRUE,
+  published BOOLEAN DEFAULT FALSE,
+  visibility TEXT CHECK (visibility IN ('private', 'public')) DEFAULT 'private',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -183,7 +184,7 @@ ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- Public Read Policies
 CREATE POLICY "Profiles viewable by everyone" ON public.profiles FOR SELECT USING (true);
-CREATE POLICY "Published stories viewable by everyone" ON public.stories FOR SELECT USING (published = true OR auth.uid() = author_id);
+CREATE POLICY "Stories viewable policy" ON public.stories FOR SELECT USING (visibility = 'public' OR auth.uid() = author_id);
 CREATE POLICY "Comments viewable by everyone" ON public.comments FOR SELECT USING (true);
 CREATE POLICY "Votes viewable by everyone" ON public.would_watch_votes FOR SELECT USING (true);
 CREATE POLICY "Casting votes viewable by everyone" ON public.casting_votes FOR SELECT USING (true);

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { getStories, deleteStory, updateStoryStatus } from '@/lib/dataService';
 import { useAuth } from '@/context/AuthContext';
 import { Story } from '@/types';
-import { PenSquare, BookOpen, Eye, Heart, Star, Flame, Sparkles, FileText, Trash2, Globe, EyeOff, Plus, Loader2 } from 'lucide-react';
+import { PenSquare, BookOpen, Eye, Heart, Star, Flame, Sparkles, FileText, Trash2, Globe, Lock, Plus, Loader2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -35,8 +35,9 @@ export default function DashboardPage() {
     }
   };
 
-  const handleTogglePublish = (storyId: string, currentPublished: boolean) => {
-    updateStoryStatus(storyId, !currentPublished);
+  const handleToggleVisibility = (storyId: string, currentVisibility?: 'private' | 'public') => {
+    const nextVis = currentVisibility === 'public' ? 'private' : 'public';
+    updateStoryStatus(storyId, nextVis === 'public', nextVis);
     if (profile) loadStories(profile.id);
   };
 
@@ -51,8 +52,8 @@ export default function DashboardPage() {
 
   if (!profile) return null;
 
-  const publishedStories = stories.filter((s) => s.published);
-  const draftsCount = stories.filter((s) => !s.published).length;
+  const publicStories = stories.filter((s) => s.visibility === 'public');
+  const privateStoriesCount = stories.filter((s) => s.visibility !== 'public').length;
   const totalReads = stories.reduce((sum, s) => sum + s.views, 0);
   const totalLikes = stories.reduce((sum, s) => sum + s.likes_count, 0);
   const avgRating = stories.length > 0
@@ -75,7 +76,7 @@ export default function DashboardPage() {
             YOUR KATHA PORTFOLIO
           </h1>
           <p className="text-xs text-zinc-400 font-sans">
-            Welcome back, @{profile.username}! Track your reader metrics & story impact.
+            Welcome back, @{profile.username}! Private stories are visible only to you.
           </p>
         </div>
 
@@ -84,8 +85,8 @@ export default function DashboardPage() {
             href="/dashboard/drafts"
             className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs px-4 py-2.5 rounded-full transition-colors"
           >
-            <FileText className="w-4 h-4 text-amber-400" />
-            <span>Drafts ({draftsCount})</span>
+            <Lock className="w-4 h-4 text-amber-400" />
+            <span>Private Stories ({privateStoriesCount})</span>
           </Link>
 
           <Link
@@ -104,9 +105,9 @@ export default function DashboardPage() {
         <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl text-center space-y-1">
           <div className="text-2xl font-black text-white flex items-center justify-center gap-1">
             <BookOpen className="w-5 h-5 text-red-500" />
-            <span>{publishedStories.length}</span>
+            <span>{publicStories.length}</span>
           </div>
-          <div className="text-[10px] font-bold text-zinc-400 uppercase">Published</div>
+          <div className="text-[10px] font-bold text-zinc-400 uppercase">Public</div>
         </div>
 
         <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl text-center space-y-1">
@@ -162,7 +163,7 @@ export default function DashboardPage() {
           <div className="p-12 text-center bg-zinc-950 border border-zinc-800 rounded-3xl space-y-3">
             <FileText className="w-12 h-12 text-zinc-600 mx-auto" />
             <h3 className="text-base font-bold text-white">No stories written yet</h3>
-            <p className="text-xs text-zinc-400">Share your first Tollywood movie concept on KATHA today!</p>
+            <p className="text-xs text-zinc-400">Share your first Tollywood movie concept on KATHA today! Default visibility is Private.</p>
             <Link
               href="/write"
               className="inline-block bg-red-600 text-white font-bold text-xs px-6 py-2.5 rounded-full"
@@ -175,6 +176,7 @@ export default function DashboardPage() {
             {stories.map((story) => {
               const totalVotes = story.would_watch_yes + story.would_watch_no;
               const watchPct = totalVotes > 0 ? Math.round((story.would_watch_yes / totalVotes) * 100) : 0;
+              const isPublic = story.visibility === 'public';
 
               return (
                 <div
@@ -189,10 +191,11 @@ export default function DashboardPage() {
                     />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
-                          story.published ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-zinc-900 text-amber-400 border border-amber-800'
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded flex items-center gap-1 ${
+                          isPublic ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'
                         }`}>
-                          {story.published ? 'Published' : 'Draft'}
+                          {isPublic ? <Globe className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                          {isPublic ? 'Public' : 'Private'}
                         </span>
                         <span className="text-[11px] text-zinc-500 font-semibold">{story.genre}</span>
                       </div>
@@ -234,11 +237,21 @@ export default function DashboardPage() {
                       </Link>
 
                       <button
-                        onClick={() => handleTogglePublish(story.id, story.published)}
-                        title={story.published ? 'Unpublish to Draft' : 'Publish story'}
-                        className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-700 transition-colors"
+                        onClick={() => handleToggleVisibility(story.id, story.visibility)}
+                        title={isPublic ? 'Make Private' : 'Make Public'}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-700 transition-colors text-xs font-bold"
                       >
-                        {story.published ? <EyeOff className="w-4 h-4 text-amber-400" /> : <Globe className="w-4 h-4 text-emerald-400" />}
+                        {isPublic ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Make Private</span>
+                          </>
+                        ) : (
+                          <>
+                            <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Make Public</span>
+                          </>
+                        )}
                       </button>
 
                       <button

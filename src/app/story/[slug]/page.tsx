@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getStoryBySlugOrId, syncStoriesFromSupabase, recordStoryView, toggleStoryLike, getStoryLikeState } from '@/lib/dataService';
+import { getStoryBySlugOrId, syncStoriesFromSupabase, recordStoryView, toggleStoryLike, getStoryLikeState, getCurrentProfile } from '@/lib/dataService';
 import { Story } from '@/types';
 import WouldWatchModule from '@/components/WouldWatchModule';
 import StoryRatingModule from '@/components/StoryRatingModule';
@@ -11,7 +11,7 @@ import FanCastingModule from '@/components/FanCastingModule';
 import CommentsSection from '@/components/CommentsSection';
 import ShareVerdictModal from '@/components/ShareVerdictModal';
 import ReportModal from '@/components/ReportModal';
-import { Star, Flame, Eye, Share2, ShieldAlert, ArrowLeft, Heart, Sparkles, Loader2 } from 'lucide-react';
+import { Star, Flame, Eye, Share2, ShieldAlert, ArrowLeft, Heart, Sparkles, Loader2, Lock } from 'lucide-react';
 
 export default function StoryPage() {
   const params = useParams();
@@ -27,7 +27,9 @@ export default function StoryPage() {
 
   useEffect(() => {
     if (!slug) return;
-    const s = getStoryBySlugOrId(slug);
+    const currentP = getCurrentProfile();
+    const s = getStoryBySlugOrId(slug, currentP?.id);
+
     if (s) {
       setStory(s);
       setLikesCount(s.likes_count);
@@ -36,7 +38,7 @@ export default function StoryPage() {
       setLoading(false);
     } else {
       syncStoriesFromSupabase().then(() => {
-        const found = getStoryBySlugOrId(slug);
+        const found = getStoryBySlugOrId(slug, currentP?.id);
         if (found) {
           setStory(found);
           setLikesCount(found.likes_count);
@@ -52,19 +54,27 @@ export default function StoryPage() {
     return (
       <div className="max-w-4xl mx-auto px-4 py-24 text-center space-y-4">
         <Loader2 className="w-10 h-10 text-red-500 animate-spin mx-auto" />
-        <p className="text-sm text-zinc-400">Loading story script...</p>
+        <p className="text-sm text-zinc-400">Verifying story permissions...</p>
       </div>
     );
   }
 
+  // Security Enforcement: Direct URL access blocking for private stories
   if (!story) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-20 text-center space-y-4">
-        <h2 className="text-2xl font-bold text-white">Story Not Found</h2>
-        <p className="text-zinc-400 text-sm">Looks like this Katha disappeared into another universe.</p>
-        <Link href="/stories" className="inline-block bg-red-600 text-white text-xs font-bold px-5 py-2.5 rounded-full">
-          EXPLORE STORIES
-        </Link>
+      <div className="max-w-4xl mx-auto px-4 py-24 text-center space-y-4">
+        <div className="p-4 rounded-full bg-red-950/40 border border-red-800/40 w-16 h-16 mx-auto flex items-center justify-center text-red-400">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-black text-white uppercase tracking-tight">Private Story Access Denied</h2>
+        <p className="text-zinc-400 text-sm max-w-md mx-auto">
+          This Katha is marked as private by its writer and cannot be accessed by other users.
+        </p>
+        <div className="pt-2">
+          <Link href="/stories" className="inline-block bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-6 py-3 rounded-full transition-all">
+            EXPLORE PUBLIC STORIES
+          </Link>
+        </div>
       </div>
     );
   }
@@ -105,9 +115,18 @@ export default function StoryPage() {
 
         {/* Top Badges */}
         <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-10">
-          <span className="bg-red-600 text-white text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider shadow-lg">
-            {story.genre}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="bg-red-600 text-white text-xs font-black px-3.5 py-1 rounded-full uppercase tracking-wider shadow-lg">
+              {story.genre}
+            </span>
+
+            {story.visibility === 'private' && (
+              <span className="bg-amber-950/90 text-amber-400 border border-amber-800 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider flex items-center gap-1">
+                <Lock className="w-3 h-3" />
+                <span>Private Story</span>
+              </span>
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
             <button
